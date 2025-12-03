@@ -13,7 +13,7 @@ COPY service ./service
 
 # Become non-root user
 #RUN useradd -m -r service && \
-    chown -R service:service /app
+    #chown -R service:service /app
 #USER service
 
 # Run the service on port 8000
