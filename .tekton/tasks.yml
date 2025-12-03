@@ -12,11 +12,14 @@ spec:
       env:
         - name: WORKSPACE_SOURCE_PATH
           value: $(workspaces.source.path)
-      workingDir: $(workspaces.source.path)
       securityContext:
-        runAsNonRoot: false
-        runAsUser: 0
-      script: | 
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      script: |
         #!/usr/bin/env sh
         set -eu
         echo "Removing all files from ${WORKSPACE_SOURCE_PATH} ..."
@@ -36,6 +39,75 @@ spec:
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
+  name: git-clone
+spec:
+  description: This task will clone repo into workspace.
+  workspaces:
+    - name: source
+  params:
+    - name: repo-url
+      description: Repo URL
+      type: string
+      default: " "
+    - name: branch
+      description: Branch to be cloned
+      type: string
+      default: "master"
+  steps:
+    - name: clone
+      image: bitnami/git
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: HOME
+          value: /tekton/home
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      command: ["git"]
+      args: ["clone", "--branch", $(params.branch), $(params.repo-url)]
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: flake8
+spec:
+  description: This task will run quality checks for the code.
+  workspaces:
+    - name: source
+  params:
+    - name: args
+      description: Arguments to pass to flake8
+      type: string
+      default: "--count"
+  steps:
+    - name: lint
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: HOME
+          value: /tekton/home
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      script: |
+        #!/bin/bash
+        cd ci-cd-final-project
+        export PATH="$PATH:$HOME/.local/bin"
+        python -m pip install --upgrade pip wheel
+        pip install -r requirements.txt
+        flake8 service $(params.args)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
   name: nose
 spec:
   description: This task will run unit tests.
@@ -50,9 +122,71 @@ spec:
     - name: nosetests
       image: python:3.9-slim
       workingDir: $(workspaces.source.path)
-      script: | 
+      env:
+        - name: HOME
+          value: /tekton/home
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      script: |
         #!/bin/bash
-        set -e
+        cd ci-cd-final-project
+        export PATH="$PATH:$HOME/.local/bin"
         python -m pip install --upgrade pip wheel
         pip install -r requirements.txt
         nosetests $(params.args)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build
+spec:
+  description: Using as a trigger for build config in openshift
+  workspaces:
+    - name: source
+  params:
+    - name: build-config-name
+      description: Name for build config
+  steps:
+    - name: trigger-build-config
+      image: quay.io/openshift/origin-cli:4.15
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      script: |
+        #!/bin/sh
+        oc start-build $(params.build-config-name) --from-dir=ci-cd-final-project/ --follow
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy
+spec:
+  description: Deploy image to openshift
+  params:
+    - name: build-image
+      description: Image name
+    - name: app-name
+      description: Deployment name
+  steps:
+    - name: deploy-image
+      image: quay.io/openshift/origin-cli:4.15
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: ["ALL"]
+      script: |
+        #!/bin/sh
+        oc create deployment $(params.app-name) --image=$(params.build-image) --dry-run=client -o yaml | oc apply -f -
