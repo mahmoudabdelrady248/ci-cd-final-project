@@ -12,9 +12,9 @@ RUN python -m pip install -U pip wheel && \
 COPY service ./service
 
 # Become non-root user
-RUN useradd -m -r service && \
-    chown -R service:service /app
-USER service
+#RUN useradd -m -r service && \
+#    chown -R service:service /app
+#USER service
 
 # Run the service on port 8000
 ENV PORT 8000
